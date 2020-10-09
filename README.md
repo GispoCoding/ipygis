@@ -1,5 +1,5 @@
-# ipypostgis
-PostGIS utils for Jupyter Notebook.
+# ipygis
+GIS utils for Jupyter Notebook.
 
 ## Usage
 TBA

@@ -4,14 +4,14 @@ with open('README.md', 'r') as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name='ipypostgis',
+    name='ipygis',
     version='0.0.1',
     author='Joona Laine',
     author_email='joona@gispo.fi',
-    description='PostGIS utils for Jupyter Notebook',
+    description='GIS utils for Jupyter Notebook',
     long_description=long_description,
     long_description_content_type='text/markdown',
-    url='https://github.com/GispoCoding/ipypostgis',
+    url='https://github.com/GispoCoding/ipygis',
     packages=setuptools.find_packages(),
     install_requires=[
         'geopandas>=0.8.1',
