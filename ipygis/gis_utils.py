@@ -4,12 +4,14 @@ from typing import TypedDict, Optional, List
 
 import geopandas as gpd
 from keplergl import KeplerGl
-from pandas import DataFrame
+from pandas import DataFrame, read_sql
 from shapely import wkb, geos
 
 geos.WKBWriter.defaults['include_srid'] = True
 
 from sql.run import ResultSet
+from sqlalchemy.orm import Query
+from geoalchemy2.shape import to_shape
 
 GEOM_COL = 'geometry'
 
@@ -67,7 +69,7 @@ class QueryResult:
             return list(self.gdf.head(1)[GEOM_COL])[0].geometryType()
 
     @staticmethod
-    def create(rs: ResultSet, geom_column: str = 'geom', name: Optional[str] = None):
+    def create(rs: Union[ResultSet,Query], geom_column: str = 'geom', name: Optional[str] = None):
         gdf = to_gdf(rs, geom_column)
         center = None
         if len(gdf):
@@ -89,13 +91,16 @@ class QueryResult:
         return f'{self.gdf.head(1)}'
 
 
-def to_gdf(rs: ResultSet, geom_column: str = 'geom') -> gpd.GeoDataFrame:
+def to_gdf(rs: Union[ResultSet,Query], geom_column: str = 'geom') -> gpd.GeoDataFrame:
     """
-    Converts ResultSet to GeoDataFrame
+    Converts sql ResultSet or SqlAlchemy Query to GeoDataFrame
     :param rs:
     :param geom_column:
     """
-    df: DataFrame = rs.DataFrame()
+    if type(rs) is ResultSet:
+        df: DataFrame = rs.DataFrame()
+    elif type(rs) is Query:
+        df: DataFrame = read_sql(rs.statement, rs.session.bind)
     if len(df) == 0:
         return gpd.GeoDataFrame()
 
@@ -106,7 +111,10 @@ def to_gdf(rs: ResultSet, geom_column: str = 'geom') -> gpd.GeoDataFrame:
                 geom_column = col
                 break
 
-    df[GEOM_COL] = df[geom_column].apply(lambda geom: wkb.loads(geom, hex=True))
+    if type(rs) is ResultSet:
+        df[GEOM_COL] = df[geom_column].apply(lambda geom: wkb.loads(geom, hex=True))
+    elif type(rs) is Query:
+        df[GEOM_COL] = df[geom_column].apply(lambda geom: to_shape(geom))
     if geom_column != GEOM_COL:
         df = df.drop(columns=[geom_column])
 
@@ -150,10 +158,10 @@ def generate_map(query_results: List[QueryResult], height: int = 500) -> KeplerG
     return map_1
 
 
-def get_map(rs: ResultSet, geom_column: str = 'geom', name: Optional[str] = None, height: int = 500) -> KeplerGl:
+def get_map(rs: Union[ResultSet,Query], geom_column: str = 'geom', name: Optional[str] = None, height: int = 500) -> KeplerGl:
     """
-    Returns Kepler map for single query. For multiple queries, use generate_map
-    :param rs: Result set of the query
+    Returns Kepler map for single query. For multiple queries or dataframes, use generate_map
+    :param rs: Result set of the query, or SqlAlchemy Query
     :param geom_column: Name of the geometry column
     :param name: Name of the dataset
     :param height: Height of the map
