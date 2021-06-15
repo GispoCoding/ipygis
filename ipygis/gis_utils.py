@@ -1,11 +1,13 @@
 from decimal import Decimal
 from statistics import mean
-from typing import TypedDict, Optional, List
+from typing import Dict, TypedDict, Optional, List, Union
 
 import geopandas as gpd
 from keplergl import KeplerGl
 from pandas import DataFrame, read_sql
 from shapely import wkb, geos
+from shapely.geometry import Point
+from h3 import geo_to_h3, h3_to_geo
 
 geos.WKBWriter.defaults['include_srid'] = True
 
@@ -69,7 +71,11 @@ class QueryResult:
             return list(self.gdf.head(1)[GEOM_COL])[0].geometryType()
 
     @staticmethod
-    def create(rs: Union[ResultSet,Query], geom_column: str = 'geom', name: Optional[str] = None):
+    def create(
+            rs: Union[ResultSet, Query],
+            geom_column: str = 'geom',
+            name: Optional[str] = None,
+            resolution: Optional[int] = 0):
         gdf = to_gdf(rs, geom_column)
         center = None
         if len(gdf):
@@ -79,6 +85,20 @@ class QueryResult:
                 gdf = gdf.to_crs(epsg=4326)
             minx, miny, maxx, maxy = gdf.total_bounds
             center = {'latitude': (miny + maxy) / 2.0, 'longitude': (minx + maxx) / 2.0}
+
+        if resolution:
+            # Add H3 index
+            hex_col = 'hex' + str(resolution)
+            # H3 uses lat, lon
+            gdf[hex_col] = gdf[GEOM_COL].apply(lambda geom: geo_to_h3(geom.y, geom.x, resolution),1)
+            # Join rows with the same index
+            counts = gdf.groupby(hex_col, sort=False).size().to_frame('count')
+            counts[hex_col] = counts.index
+            # Add centroid geometry just in case. Of course, H3 has lat lon in the wrong order again
+            centroid_lat_lon = counts.index.map(lambda index: h3_to_geo(index))
+            counts[GEOM_COL] = [Point(geom[1], geom[0]) for geom in centroid_lat_lon]
+            gdf = gpd.GeoDataFrame(counts, geometry=GEOM_COL, crs=gdf.crs)
+
         return QueryResult(gdf, center, name)
 
     @staticmethod
@@ -139,8 +159,12 @@ def to_gdf(rs: Union[ResultSet,Query], geom_column: str = 'geom') -> gpd.GeoData
     return gdf
 
 
-def generate_map(query_results: List[QueryResult], height: int = 500) -> KeplerGl:
-    config = KEPLER_DEFAULT_CONFIG.copy()
+def generate_map(
+        query_results: List[QueryResult],
+        height: int = 500,
+        config: Optional[Dict] = KEPLER_DEFAULT_CONFIG
+        ) -> KeplerGl:
+    config = config.copy()
     center = QueryResult.get_center_of_all(query_results)
     has_strings = list(filter(lambda qr: qr.geom_type in ['MultiLineString', 'LineString'], query_results))
 
@@ -150,11 +174,18 @@ def generate_map(query_results: List[QueryResult], height: int = 500) -> KeplerG
         config['config']['visState']['layerBlending'] = 'additive'
     # TODO: determine zoom level
 
-    map_1 = KeplerGl(height=height, config=config)
+    map_1 = KeplerGl(height=height)
     for i, qr in enumerate(query_results, start=1):
         if not qr.is_empty:
             name = qr.name if qr.name is not None else f'data_{i}'
             map_1.add_data(data=qr.gdf, name=name)
+            hex_column = next((column for column in qr.gdf.columns if column.startswith('hex')), False)
+            # here we do some creative mangling to adapt the layer config to data. Hex column name may change
+            for layer in config['config']['visState']['layers']:
+                if layer["type"] == "hexagonId" and hex_column:
+                    layer["config"]["label"] = hex_column
+                    layer["config"]["columns"]["hex_id"] = hex_column
+    map_1.config = config
     return map_1
 
 
@@ -168,3 +199,24 @@ def get_map(rs: Union[ResultSet,Query], geom_column: str = 'geom', name: Optiona
     """
     qr = QueryResult.create(rs, geom_column, name)
     return generate_map([qr], height)
+
+
+def get_h3_map(
+        rs: Union[ResultSet,Query],
+        resolution: int,
+        geom_column: str = 'geom',
+        name: Optional[str] = None,
+        height: int = 500,
+        config: Optional[Dict] = KEPLER_DEFAULT_CONFIG,
+        ) -> KeplerGl:
+    """
+    Returns Kepler H3 map for single query. For multiple queries or dataframes, use generate_map
+    :param rs: Result set of the query, or SqlAlchemy Query
+    :param resolution: Desired H3 grid resolution to aggregate rows with.
+    :param geom_column: Name of the geometry column
+    :param name: Name of the dataset
+    :param height: Height of the map
+    :param config: Kepler config dict to use for styling H3 map layers.
+    """
+    qr = QueryResult.create(rs, geom_column, name, resolution=resolution)
+    return generate_map([qr], height, config=config)
