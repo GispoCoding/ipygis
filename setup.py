@@ -16,6 +16,7 @@ setuptools.setup(
     install_requires=[
         'geoalchemy2>=0.9.0',
         'geopandas>=0.8.1',
+        'h3>=3.7.3',
         'ipython-sql>=0.4.0',
         'keplergl>=0.2.1'
     ],
