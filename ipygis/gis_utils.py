@@ -1,4 +1,5 @@
 from decimal import Decimal
+from math import log2
 from statistics import mean
 from typing import Dict, TypedDict, Optional, List, Union
 
@@ -59,10 +60,11 @@ class Center(TypedDict):
 
 class QueryResult:
 
-    def __init__(self, gdf: gpd.GeoDataFrame, center: Optional[Center], name: Optional[str] = None):
+    def __init__(self, gdf: gpd.GeoDataFrame, center: Optional[Center], zoom: Optional[int], name: Optional[str] = None):
         self.gdf = gdf
         self.is_empty = center is None
         self.center = center
+        self.zoom = zoom
         self.name = name
 
     @property
@@ -78,6 +80,7 @@ class QueryResult:
             resolution: Optional[int] = 0):
         gdf = to_gdf(rs, geom_column)
         center = None
+        zoom = None
         if len(gdf):
             if gdf.crs is None:
                 gdf = gdf.set_crs(epsg=4326)
@@ -85,6 +88,11 @@ class QueryResult:
                 gdf = gdf.to_crs(epsg=4326)
             minx, miny, maxx, maxy = gdf.total_bounds
             center = {'latitude': (miny + maxy) / 2.0, 'longitude': (minx + maxx) / 2.0}
+            # ballpark approximation of zoom around 60 °N and 2:1 viewport shape
+            # - web mercator will have around 2:1 lon/lat ratio around 60 °N
+            longer_axis = max(maxy - miny, (maxx - minx)/4)
+            # - zoom 0 will fit ~180 lat degrees
+            zoom = log2(180/longer_axis)
 
         if resolution:
             # Add H3 index
@@ -99,13 +107,18 @@ class QueryResult:
             counts[GEOM_COL] = [Point(geom[1], geom[0]) for geom in centroid_lat_lon]
             gdf = gpd.GeoDataFrame(counts, geometry=GEOM_COL, crs=gdf.crs)
 
-        return QueryResult(gdf, center, name)
+        return QueryResult(gdf, center, zoom, name)
 
     @staticmethod
     def get_center_of_all(query_results: List['QueryResult']) -> Optional[Center]:
         latitudes = [qr.center['latitude'] for qr in query_results if not qr.is_empty]
         longitudes = [qr.center['longitude'] for qr in query_results if not qr.is_empty]
         return {'latitude': mean(latitudes), 'longitude': mean(longitudes)} if len(latitudes) else None
+
+    @staticmethod
+    def get_zoom_of_all(query_results: List['QueryResult']) -> Optional[int]:
+        zooms = [qr.zoom for qr in query_results if not qr.is_empty]
+        return min(zooms) if len(zooms) else None
 
     def __str__(self):
         return f'{self.gdf.head(1)}'
@@ -166,13 +179,15 @@ def generate_map(
         ) -> KeplerGl:
     config = config.copy()
     center = QueryResult.get_center_of_all(query_results)
+    zoom = QueryResult.get_zoom_of_all(query_results)
     has_strings = list(filter(lambda qr: qr.geom_type in ['MultiLineString', 'LineString'], query_results))
 
     if center:
         config['config']['mapState'].update(**center)
+    if zoom:
+        config['config']['mapState']['zoom'] = zoom
     if has_strings:
         config['config']['visState']['layerBlending'] = 'additive'
-    # TODO: determine zoom level
 
     map_1 = KeplerGl(height=height)
     for i, qr in enumerate(query_results, start=1):
