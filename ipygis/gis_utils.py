@@ -5,7 +5,7 @@ from typing import Dict, TypedDict, Optional, List, Union
 
 import geopandas as gpd
 from keplergl import KeplerGl
-from pandas import DataFrame, read_sql
+from pandas import DataFrame, read_sql, json_normalize
 from shapely import wkb, geos
 from shapely.geometry import Point
 from h3 import geo_to_h3, h3_to_geo
@@ -73,11 +73,36 @@ class QueryResult:
             return list(self.gdf.head(1)[GEOM_COL])[0].geometryType()
 
     @staticmethod
+    def flatten_dataframe(df: DataFrame, column: str) -> DataFrame:
+        """
+        Flattens dataframe to contain nested JSON column
+        :param df: Dataframe to flatten
+        :param column: Name of the nested column, e.g. tags.amenity
+        """
+        if "." in column:
+            column, subcolumn = column.split(".", 1)
+            # normalize JSON object to make queries inside
+            if df[column].dtype == "O":
+                df = df.merge(
+                    json_normalize(df[column], max_level=1),
+                    left_index=True,
+                    right_index=True,
+                )
+                return QueryResult.flatten_dataframe(df, subcolumn)
+            else:
+                raise KeyError(
+                    f"Cannot flatten dataframe by {column}.{subcolumn}, {column} dtype is not object"
+                )
+        return df
+
+    @staticmethod
     def create(
             rs: Union[ResultSet, Query],
             geom_column: str = 'geom',
             name: Optional[str] = None,
-            resolution: Optional[int] = 0):
+            resolution: Optional[int] = 0,
+            group_by: Optional[str] = None
+            ):
         gdf = to_gdf(rs, geom_column)
         center = None
         zoom = None
@@ -99,8 +124,17 @@ class QueryResult:
             hex_col = 'hex' + str(resolution)
             # H3 uses lat, lon
             gdf[hex_col] = gdf[GEOM_COL].apply(lambda geom: geo_to_h3(geom.y, geom.x, resolution),1)
-            # Join rows with the same index
-            counts = gdf.groupby(hex_col, sort=False).size().to_frame('count')
+            # Rows may be grouped by any field in a JSON
+            if group_by:
+                data_to_group = QueryResult.flatten_dataframe(gdf, group_by)
+                if "." in group_by:
+                    _, group_by = group_by.rsplit(".", 1)
+                # Join rows with the same value in group_by field
+                data_to_group = data_to_group.groupby([hex_col, group_by], sort=False).size()
+            else:
+                data_to_group = gdf
+            # Join rows with the same hex
+            counts = data_to_group.groupby(hex_col, sort=False).size().to_frame("count")
             counts[hex_col] = counts.index
             # Add centroid geometry just in case. Of course, H3 has lat lon in the wrong order again
             centroid_lat_lon = counts.index.map(lambda index: h3_to_geo(index))
@@ -223,6 +257,7 @@ def get_h3_map(
         name: Optional[str] = None,
         height: int = 500,
         config: Optional[Dict] = KEPLER_DEFAULT_CONFIG,
+        group_by: Optional[str] = None,
         ) -> KeplerGl:
     """
     Returns Kepler H3 map for single query. For multiple queries or dataframes, use generate_map
@@ -232,6 +267,7 @@ def get_h3_map(
     :param name: Name of the dataset
     :param height: Height of the map
     :param config: Kepler config dict to use for styling H3 map layers.
+    :param group_by: Name of the field to aggregate with, in addition to H3 hex.
     """
-    qr = QueryResult.create(rs, geom_column, name, resolution=resolution)
+    qr = QueryResult.create(rs, geom_column, name, resolution=resolution, group_by=group_by)
     return generate_map([qr], height, config=config)
