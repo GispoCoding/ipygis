@@ -101,6 +101,8 @@ class QueryResult:
             geom_column: str = 'geom',
             name: Optional[str] = None,
             resolution: Optional[int] = 0,
+            plot: str = "size",
+            column: Optional[str] = None,
             group_by: Optional[str] = None
             ):
         gdf = to_gdf(rs, geom_column)
@@ -124,22 +126,31 @@ class QueryResult:
             hex_col = 'hex' + str(resolution)
             # H3 uses lat, lon
             gdf[hex_col] = gdf[GEOM_COL].apply(lambda geom: geo_to_h3(geom.y, geom.x, resolution),1)
-            # Rows may be grouped by any field in a JSON
+
             if group_by:
+                # Rows may be grouped by any field in a JSON
                 data_to_group = QueryResult.flatten_dataframe(gdf, group_by)
                 if "." in group_by:
-                    _, group_by = group_by.rsplit(".", 1)
+                    _, group_by = group_by.rsplit(".",1)
                 # Join rows with the same value in group_by field
-                data_to_group = data_to_group.groupby([hex_col, group_by], sort=False).size()
+                data_to_group = data_to_group.groupby([hex_col, group_by], sort=False, as_index=False).size()
+            elif column:
+                # Flatten the dataframe so we may calculate means etc. for the desired column
+                data_to_group = QueryResult.flatten_dataframe(gdf, column)
+                _, column = column.rsplit(".", 1)
             else:
                 data_to_group = gdf
-            # Join rows with the same hex
-            counts = data_to_group.groupby(hex_col, sort=False).size().to_frame("count")
-            counts[hex_col] = counts.index
+
+            groupby = data_to_group.groupby(hex_col, sort=False, as_index=False)
+            if column:
+                groupby = groupby[column]
+            # plot = size (or mean, or median, or max, or min) of rows within the same hex
+            # Available functions: https://pandas.pydata.org/docs/reference/groupby.html
+            results = getattr(groupby, plot)()
             # Add centroid geometry just in case. Of course, H3 has lat lon in the wrong order again
-            centroid_lat_lon = counts.index.map(lambda index: h3_to_geo(index))
-            counts[GEOM_COL] = [Point(geom[1], geom[0]) for geom in centroid_lat_lon]
-            gdf = gpd.GeoDataFrame(counts, geometry=GEOM_COL, crs=gdf.crs)
+            centroid_lat_lon = results[hex_col].map(lambda hex: h3_to_geo(hex))
+            results[GEOM_COL] = [Point(geom[1], geom[0]) for geom in centroid_lat_lon]
+            gdf = gpd.GeoDataFrame(results, geometry=GEOM_COL, crs=gdf.crs)
 
         return QueryResult(gdf, center, zoom, name)
 
@@ -209,7 +220,8 @@ def to_gdf(rs: Union[ResultSet,Query], geom_column: str = 'geom') -> gpd.GeoData
 def generate_map(
         query_results: List[QueryResult],
         height: int = 500,
-        config: Optional[Dict] = KEPLER_DEFAULT_CONFIG
+        config: Optional[Dict] = KEPLER_DEFAULT_CONFIG,
+        column: Optional[str] = None,
         ) -> KeplerGl:
     config = config.copy()
     center = QueryResult.get_center_of_all(query_results)
@@ -228,12 +240,24 @@ def generate_map(
         if not qr.is_empty:
             name = qr.name if qr.name is not None else f'data_{i}'
             map_1.add_data(data=qr.gdf, name=name)
-            hex_column = next((column for column in qr.gdf.columns if column.startswith('hex')), False)
-            # here we do some creative mangling to adapt the layer config to data. Hex column name may change
-            for layer in config['config']['visState']['layers']:
-                if layer["type"] == "hexagonId" and hex_column:
-                    layer["config"]["label"] = hex_column
-                    layer["config"]["columns"]["hex_id"] = hex_column
+            hex_column = next(
+                (col for col in qr.gdf.columns if col.startswith("hex")), False
+            )
+            # here we do some creative mangling to adapt the layer config to data.
+            for layer in config["config"]["visState"]["layers"]:
+                if layer["type"] == "hexagonId":
+                    # Hex column name may change
+                    if hex_column:
+                        layer["config"]["label"] = hex_column
+                        layer["config"]["columns"]["hex_id"] = hex_column
+                    # Also column that the user wishes to plot may change
+                    if column:
+                        layer["visualChannels"]["colorField"]["name"] = column
+                        if qr.gdf[column].dtype == "float64":
+                            layer["visualChannels"]["colorField"]["type"] = "real"
+                        elif qr.gdf[column].dtype == "int64":
+                            layer["visualChannels"]["colorField"]["type"] = "integer"
+
     map_1.config = config
     return map_1
 
@@ -254,6 +278,8 @@ def get_h3_map(
         rs: Union[ResultSet,Query],
         resolution: int,
         geom_column: str = 'geom',
+        plot: str = 'size',
+        column: Optional[str] = None,
         name: Optional[str] = None,
         height: int = 500,
         config: Optional[Dict] = KEPLER_DEFAULT_CONFIG,
@@ -264,10 +290,14 @@ def get_h3_map(
     :param rs: Result set of the query, or SqlAlchemy Query
     :param resolution: Desired H3 grid resolution to aggregate rows with.
     :param geom_column: Name of the geometry column
+    :param plot: GroupBy statistic to plot per hex. Default is "size", which counts point numbers.
+        Available functions: https://pandas.pydata.org/docs/reference/groupby.html
+    :param column: Name of the field or JSON column to plot GroupBy property for.
     :param name: Name of the dataset
     :param height: Height of the map
     :param config: Kepler config dict to use for styling H3 map layers.
     :param group_by: Name of the field to aggregate with, in addition to H3 hex.
     """
-    qr = QueryResult.create(rs, geom_column, name, resolution=resolution, group_by=group_by)
-    return generate_map([qr], height, config=config)
+    qr = QueryResult.create(rs, geom_column, name, resolution=resolution, plot=plot, column=column, group_by=group_by)
+    column = column.rsplit(".",1)[-1] if column else None
+    return generate_map([qr], height, config=config, column=column)
