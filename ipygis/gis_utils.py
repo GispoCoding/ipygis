@@ -1,3 +1,4 @@
+from copy import deepcopy
 from decimal import Decimal
 from math import log2
 from statistics import mean
@@ -52,6 +53,177 @@ KEPLER_DEFAULT_CONFIG = {'version': 'v1',
                                                                          31.1442867897876],
                                                  'mapStyles': {}}}}
 
+KEPLER_DEFAULT_LAYER_CONFIG = {
+            "id": "data_1",
+            "type": "geojson",
+            "config": {
+              "dataId": "data_1",
+              "label": "data_1",
+              "color": [
+                241,
+                92,
+                23
+              ],
+              "columns": {
+                "geojson": "geometry"
+              },
+              "isVisible": False,
+              "visConfig": {
+                "opacity": 0.8,
+                "strokeOpacity": 0.8,
+                "thickness": 0.5,
+                "strokeColor": None,
+                "colorRange": {
+                  "name": "Global Warming",
+                  "type": "sequential",
+                  "category": "Uber",
+                  "colors": [
+                    "#5A1846",
+                    "#900C3F",
+                    "#C70039",
+                    "#E3611C",
+                    "#F1920E",
+                    "#FFC300"
+                  ]
+                },
+                "strokeColorRange": {
+                  "name": "Global Warming",
+                  "type": "sequential",
+                  "category": "Uber",
+                  "colors": [
+                    "#5A1846",
+                    "#900C3F",
+                    "#C70039",
+                    "#E3611C",
+                    "#F1920E",
+                    "#FFC300"
+                  ]
+                },
+                "radius": 10,
+                "sizeRange": [
+                  0,
+                  10
+                ],
+                "radiusRange": [
+                  0,
+                  50
+                ],
+                "heightRange": [
+                  0,
+                  500
+                ],
+                "elevationScale": 5,
+                "stroked": False,
+                "filled": True,
+                "enable3d": False,
+                "wireframe": False
+              },
+              "hidden": False,
+              "textLabel": [
+                {
+                  "field": None,
+                  "color": [
+                    255,
+                    255,
+                    255
+                  ],
+                  "size": 18,
+                  "offset": [
+                    0,
+                    0
+                  ],
+                  "anchor": "start",
+                  "alignment": "center"
+                }
+              ]
+            },
+            "visualChannels": {
+              "colorField": None,
+              "colorScale": "quantile",
+              "sizeField": None,
+              "sizeScale": "linear",
+              "strokeColorField": None,
+              "strokeColorScale": "quantile",
+              "heightField": None,
+              "heightScale": "linear",
+              "radiusField": None,
+              "radiusScale": "linear"
+            }
+          }
+
+KEPLER_DEFAULT_HEX_LAYER_CONFIG = {
+            "id": "hex_data_1",
+            "type": "hexagonId",
+            "config": {
+              "dataId": "data_1",
+              "label": "hex7",
+              "color": [
+                34,
+                63,
+                154
+              ],
+              "columns": {
+                "hex_id": "hex7"
+              },
+              "isVisible": True,
+              "visConfig": {
+                "opacity": 0.8,
+                "colorRange": {
+                  "name": "Global Warming",
+                  "type": "sequential",
+                  "category": "Uber",
+                  "colors": [
+                    "#5A1846",
+                    "#900C3F",
+                    "#C70039",
+                    "#E3611C",
+                    "#F1920E",
+                    "#FFC300"
+                  ]
+                },
+                "coverage": 1,
+                "enable3d": False,
+                "sizeRange": [
+                  0,
+                  500
+                ],
+                "coverageRange": [
+                  0,
+                  1
+                ],
+                "elevationScale": 5
+              },
+              "hidden": False,
+              "textLabel": [
+                {
+                  "field": None,
+                  "color": [
+                    255,
+                    255,
+                    255
+                  ],
+                  "size": 18,
+                  "offset": [
+                    0,
+                    0
+                  ],
+                  "anchor": "start",
+                  "alignment": "center"
+                }
+              ]
+            },
+            "visualChannels": {
+              "colorField": {
+                "name": "size",
+                "type": "integer"
+              },
+              "colorScale": "quantize",
+              "sizeField": None,
+              "sizeScale": "linear",
+              "coverageField": None,
+              "coverageScale": "linear"
+            }
+          }
 
 class Center(TypedDict):
     latitude: float
@@ -221,9 +393,9 @@ def generate_map(
         query_results: List[QueryResult],
         height: int = 500,
         config: Optional[Dict] = KEPLER_DEFAULT_CONFIG,
-        column: Optional[str] = None,
+        column: Optional[Union[str, List[str]]] = None,
         ) -> KeplerGl:
-    config = config.copy()
+    config = deepcopy(config)
     center = QueryResult.get_center_of_all(query_results)
     zoom = QueryResult.get_zoom_of_all(query_results)
     has_strings = list(filter(lambda qr: qr.geom_type in ['MultiLineString', 'LineString'], query_results))
@@ -236,6 +408,9 @@ def generate_map(
         config['config']['visState']['layerBlending'] = 'additive'
 
     map_1 = KeplerGl(height=height)
+
+    # empty the layer config, add point or hex layer, depending on presence of hex column
+    config["config"]["visState"]["layers"] = []
     for i, qr in enumerate(query_results, start=1):
         if not qr.is_empty:
             name = qr.name if qr.name is not None else f'data_{i}'
@@ -243,20 +418,30 @@ def generate_map(
             hex_column = next(
                 (col for col in qr.gdf.columns if col.startswith("hex")), False
             )
-            # here we do some creative mangling to adapt the layer config to data.
-            for layer in config["config"]["visState"]["layers"]:
-                if layer["type"] == "hexagonId":
-                    # Hex column name may change
-                    if hex_column:
-                        layer["config"]["label"] = hex_column
-                        layer["config"]["columns"]["hex_id"] = hex_column
-                    # Also column that the user wishes to plot may change
-                    if column:
-                        layer["visualChannels"]["colorField"]["name"] = column
-                        if qr.gdf[column].dtype == "float64":
-                            layer["visualChannels"]["colorField"]["type"] = "real"
-                        elif qr.gdf[column].dtype == "int64":
-                            layer["visualChannels"]["colorField"]["type"] = "integer"
+            if hex_column:
+                # add hex layer
+                hex_layer_config = deepcopy(KEPLER_DEFAULT_HEX_LAYER_CONFIG)
+                hex_layer_config["id"] = f"{hex_column}_{name}"
+                hex_layer_config["config"]["dataId"] = name
+                hex_layer_config["config"]["label"] = f"{hex_column}_{name}"
+                hex_layer_config["config"]["columns"]["hex_id"] = hex_column
+                # Also column that the user wishes to plot may change
+                if column:
+                    # Allow plotting different columns for different queries, or same column for all
+                    data_column = column if isinstance(column, str) else column[i-1]
+                    hex_layer_config["visualChannels"]["colorField"]["name"] = data_column
+                    if qr.gdf[data_column].dtype == "float64":
+                        hex_layer_config["visualChannels"]["colorField"]["type"] = "real"
+                    elif qr.gdf[data_column].dtype == "int64":
+                        hex_layer_config["visualChannels"]["colorField"]["type"] = "integer"
+                config["config"]["visState"]["layers"].append(hex_layer_config)
+            else:
+                # add point layer for raw data
+                layer_config = deepcopy(KEPLER_DEFAULT_LAYER_CONFIG)
+                layer_config["id"] = name
+                layer_config["config"]["dataId"] = name
+                layer_config["config"]["label"] = name
+                config["config"]["visState"]["layers"].append(layer_config)
 
     map_1.config = config
     return map_1
