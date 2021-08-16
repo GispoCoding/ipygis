@@ -67,7 +67,7 @@ KEPLER_DEFAULT_LAYER_CONFIG = {
               "columns": {
                 "geojson": "geometry"
               },
-              "isVisible": False,
+              "isVisible": True,
               "visConfig": {
                 "opacity": 0.8,
                 "strokeOpacity": 0.8,
@@ -167,7 +167,7 @@ KEPLER_DEFAULT_HEX_LAYER_CONFIG = {
               },
               "isVisible": True,
               "visConfig": {
-                "opacity": 0.8,
+                "opacity": 0.2,
                 "colorRange": {
                   "name": "Global Warming",
                   "type": "sequential",
