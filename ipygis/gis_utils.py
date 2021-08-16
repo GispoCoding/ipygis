@@ -6,7 +6,7 @@ from typing import Dict, TypedDict, Optional, List, Union
 
 import geopandas as gpd
 from keplergl import KeplerGl
-from pandas import DataFrame, read_sql, json_normalize
+from pandas import DataFrame, Series, read_sql, json_normalize
 from shapely import wkb, geos
 from shapely.geometry import Point
 from h3 import geo_to_h3, h3_to_geo
@@ -285,13 +285,8 @@ class QueryResult:
                 gdf = gdf.set_crs(epsg=4326)
             if gdf.crs.to_epsg() != 4326:
                 gdf = gdf.to_crs(epsg=4326)
-            minx, miny, maxx, maxy = gdf.total_bounds
-            center = {'latitude': (miny + maxy) / 2.0, 'longitude': (minx + maxx) / 2.0}
-            # ballpark approximation of zoom around 60 °N and 2:1 viewport shape
-            # - web mercator will have around 2:1 lon/lat ratio around 60 °N
-            longer_axis = max(maxy - miny, (maxx - minx)/4)
-            # - zoom 0 will fit ~180 lat degrees
-            zoom = log2(180/longer_axis)
+            center = get_center(gdf)
+            zoom = get_zoom(gdf)
 
         if resolution:
             # Add H3 index
@@ -323,6 +318,9 @@ class QueryResult:
             centroid_lat_lon = results[hex_col].map(lambda hex: h3_to_geo(hex))
             results[GEOM_COL] = [Point(geom[1], geom[0]) for geom in centroid_lat_lon]
             gdf = gpd.GeoDataFrame(results, geometry=GEOM_COL, crs=gdf.crs)
+            gdf = gdf.set_index(hex_col)
+            # retain hex index as column too, so it can be plotted
+            gdf[hex_col] = gdf.index
 
         return QueryResult(gdf, center, zoom, name)
 
@@ -339,6 +337,25 @@ class QueryResult:
 
     def __str__(self):
         return f'{self.gdf.head(1)}'
+
+
+def get_zoom(gdf: gpd.GeoDataFrame) -> int:
+    minx, miny, maxx, maxy = gdf.total_bounds
+    # ballpark approximation of zoom around 60 °N and 2:1 viewport shape
+    # - web mercator will have around 2:1 lon/lat ratio around 60 °N
+    longer_axis = max(maxy - miny, (maxx - minx)/4)
+    # - zoom 0 will fit ~180 lat degrees
+    return log2(180/longer_axis)
+
+
+def get_center(gdf: gpd.GeoDataFrame) -> Center:
+    minx, miny, maxx, maxy = gdf.total_bounds
+    return {'latitude': (miny + maxy) / 2.0, 'longitude': (minx + maxx) / 2.0}
+
+
+def get_h3_centroids(hex_column: Series) -> List:
+    centroid_lat_lon = hex_column.map(lambda hex: h3_to_geo(hex))
+    return [Point(geom[1], geom[0]) for geom in centroid_lat_lon]
 
 
 def to_gdf(rs: Union[ResultSet,Query], geom_column: str = 'geom') -> gpd.GeoDataFrame:
@@ -389,12 +406,76 @@ def to_gdf(rs: Union[ResultSet,Query], geom_column: str = 'geom') -> gpd.GeoData
     return gdf
 
 
+def generate_sum_layer(
+        query_results: List[QueryResult],
+        columns: List[str],
+        weights: List[int],
+        ) -> QueryResult:
+    sum_frame = None
+    for result, column, weight in zip(query_results, columns, weights):
+        gdf = result.gdf
+        # Try to use existing hex column. Fail if multiple hex columns are present
+        hex_column = next(
+            (col for col in gdf.columns if col.startswith("hex")), False
+        )
+        if not hex_column:
+            if weight:
+                raise KeyError(
+                    "Cannot sum dataframe without hex column. Please use zero weight for such frames."
+                )
+            continue
+        elif sum_frame is not None and sum_frame.index.name != hex_column:
+            raise KeyError(
+                    f"Cannot sum dataframes with different hex sizes, {sum_frame.index.name} vs. {hex_column}"
+                )
+        values = gdf[column]
+        max_value = values.max()
+        if weight < 0:
+            # negative weight means the values should be reversed, smaller is better
+            gdf['normalized'] = -weight*(max_value-values)/max_value
+        else:
+            gdf['normalized'] = weight*values/max_value
+        if sum_frame is None:
+            # start with the index of the first gdf
+            sum_frame = DataFrame(index=gdf[hex_column])
+            sum_frame['normalized'] = gdf['normalized']
+        else:
+            # missing hex values equal zero
+            sum_frame = sum_frame.combine(gdf['normalized'].to_frame(), (lambda x,y: x+y), fill_value=0, overwrite=False)
+        # also save the original data in the sum frame
+        sum_frame[result.name] = gdf['normalized']
+    sum_frame.rename({'normalized': 'sum'}, axis=1, inplace=True)
+    # put the columns in the correct order
+    sum_frame = sum_frame[['sum', *[result.name for result in query_results]]]
+    sum_frame[hex_column] = sum_frame.index
+    sum_frame[GEOM_COL] = get_h3_centroids(sum_frame[hex_column])
+    sum_frame = gpd.GeoDataFrame(sum_frame, geometry=GEOM_COL)
+    return QueryResult(sum_frame, get_center(sum_frame), get_zoom(sum_frame), 'sum')
+
+
 def generate_map(
         query_results: List[QueryResult],
         height: int = 500,
         config: Optional[Dict] = KEPLER_DEFAULT_CONFIG,
         column: Optional[Union[str, List[str]]] = None,
+        weights: Optional[List[int]] = None,
         ) -> KeplerGl:
+    """
+    Returns Kepler map combining multiple query results.
+    :param query_results: List of QueryResult objects
+    :param height: Height of the map
+    :param config: Kepler config dict to use for styling the map.
+    :param column: Name of the field or JSON column in each QueryResult to plot.
+        Note that if you have calculated some statistics of a JSON field in
+        QueryResult, the dataframe is flattened already, and you must use only
+        the name of the field inside the JSON. You may provide a list of names
+        (same length as query_results) if you wish to plot different columns
+        in different dataframes.
+    :param weights: Optional. If present, will also calculate a weighted sum
+    of any H3 datasets. Must have the same length as query_results. If a dataset
+    has no hex column, it will not be included.
+    """
+
     config = deepcopy(config)
     center = QueryResult.get_center_of_all(query_results)
     zoom = QueryResult.get_zoom_of_all(query_results)
@@ -442,6 +523,29 @@ def generate_map(
                 layer_config["config"]["dataId"] = name
                 layer_config["config"]["label"] = name
                 config["config"]["visState"]["layers"].append(layer_config)
+    # Generate a new queryresult summing the hex layers if weights are present
+    if weights:
+        if isinstance(column, str):
+            column = [column] * len(weights)
+        sum_layer = generate_sum_layer(query_results, column, weights)
+        name = sum_layer.name
+        map_1.add_data(data=sum_layer.gdf, name=name)
+        hex_column = next(
+            (col for col in sum_layer.gdf.columns if col.startswith("hex")), False
+        )
+
+        # Hide the individual layers if sum is displayed
+        for layer_config in config["config"]["visState"]["layers"]:
+            layer_config["config"]["isVisible"] = False
+        # add hex layer
+        hex_layer_config = deepcopy(KEPLER_DEFAULT_HEX_LAYER_CONFIG)
+        hex_layer_config["id"] = name
+        hex_layer_config["config"]["dataId"] = name
+        hex_layer_config["config"]["label"] = name
+        hex_layer_config["config"]["columns"]["hex_id"] = hex_column
+        hex_layer_config["visualChannels"]["colorField"]["name"] = name
+        hex_layer_config["visualChannels"]["colorField"]["type"] = "real"
+        config["config"]["visState"]["layers"].append(hex_layer_config)
 
     map_1.config = config
     return map_1
