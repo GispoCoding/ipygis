@@ -301,7 +301,7 @@ class QueryResult:
                     _, group_by = group_by.rsplit(".",1)
                 # Join rows with the same value in group_by field
                 data_to_group = data_to_group.groupby([hex_col, group_by], sort=False, as_index=False).size()
-            elif column:
+            elif column and "." in column:
                 # Flatten the dataframe so we may calculate means etc. for the desired column
                 data_to_group = QueryResult.flatten_dataframe(gdf, column)
                 _, column = column.rsplit(".", 1)
