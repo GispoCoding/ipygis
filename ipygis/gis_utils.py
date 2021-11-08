@@ -316,7 +316,8 @@ class QueryResult:
             results = getattr(groupby, plot)()
             # Add centroid geometry just in case. Of course, H3 has lat lon in the wrong order again
             centroid_lat_lon = results[hex_col].map(lambda hex: h3_to_geo(hex))
-            results[GEOM_COL] = [Point(geom[1], geom[0]) for geom in centroid_lat_lon]
+            # Convert to GeoSeries first (https://github.com/Toblerity/Shapely/issues/1096#issuecomment-962988370)
+            results[GEOM_COL] = gpd.GeoSeries([Point(geom[1], geom[0]) for geom in centroid_lat_lon])
             gdf = gpd.GeoDataFrame(results, geometry=GEOM_COL, crs=gdf.crs)
             gdf = gdf.set_index(hex_col)
             # retain hex index as column too, so it can be plotted
