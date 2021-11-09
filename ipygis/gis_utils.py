@@ -14,6 +14,7 @@ from h3 import geo_to_h3, h3_to_geo
 geos.WKBWriter.defaults['include_srid'] = True
 
 from sql.run import ResultSet
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Query
 from geoalchemy2.shape import to_shape
 
@@ -368,7 +369,11 @@ def to_gdf(rs: Union[ResultSet,Query], geom_column: str = 'geom') -> gpd.GeoData
     if type(rs) is ResultSet:
         df: DataFrame = rs.DataFrame()
     elif type(rs) is Query:
-        df: DataFrame = read_sql(rs.statement, rs.session.bind)
+        try:
+            df: DataFrame = read_sql(rs.statement, rs.session.bind)
+        except ProgrammingError:
+            # the table didn't exist *or* it didn't have geometry column
+            return gpd.GeoDataFrame()
     if len(df) == 0:
         return gpd.GeoDataFrame()
 
