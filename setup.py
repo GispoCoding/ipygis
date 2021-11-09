@@ -18,7 +18,7 @@ setuptools.setup(
         'geopandas>=0.8.1',
         'h3>=3.7.3',
         'ipython-sql>=0.4.0',
-        'keplergl>=0.2.1'
+        'keplergl>=0.2.1,<0.3.1'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
