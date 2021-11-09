@@ -289,7 +289,7 @@ class QueryResult:
             center = get_center(gdf)
             zoom = get_zoom(gdf)
 
-        if resolution:
+        if len(gdf) and resolution:
             # Add H3 index
             hex_col = 'hex' + str(resolution)
             # H3 uses lat, lon
