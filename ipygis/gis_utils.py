@@ -425,10 +425,7 @@ def generate_sum_layer(
             (col for col in gdf.columns if col.startswith("hex")), False
         )
         if not hex_column:
-            if weight:
-                raise KeyError(
-                    "Cannot sum dataframe without hex column. Please use zero weight for such frames."
-                )
+            # skip any frames without hex columns, empty frames etc.
             continue
         elif sum_frame is not None and sum_frame.index.name != hex_column:
             raise KeyError(
