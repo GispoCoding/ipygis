@@ -5,7 +5,7 @@ with open('README.md', 'r') as fh:
 
 setuptools.setup(
     name='ipygis',
-    version='0.1.1',
+    version='0.1.2',
     author='Joona Laine',
     author_email='joona@gispo.fi',
     description='GIS utils for Jupyter Notebook',

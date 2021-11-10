@@ -449,7 +449,7 @@ def generate_sum_layer(
         sum_frame[result.name] = gdf['normalized']
     sum_frame.rename({'normalized': 'sum'}, axis=1, inplace=True)
     # put the columns in the correct order
-    sum_frame = sum_frame[['sum', *[result.name for result in query_results]]]
+    sum_frame = sum_frame[['sum', *[result.name for result in query_results if not result.is_empty]]]
     sum_frame[hex_column] = sum_frame.index
     sum_frame[GEOM_COL] = get_h3_centroids(sum_frame[hex_column])
     sum_frame = gpd.GeoDataFrame(sum_frame, geometry=GEOM_COL)
