@@ -5,7 +5,7 @@ GIS utils and GIS visualization/analysis functions for Jupyter Notebook.
 Among other things, ipygis is the engine behind https://github.com/GispoCoding/geoviz-notebooks .
 
 https://github.com/GispoCoding/geoviz-notebooks/blob/main/notebooks/visualize.ipynb
-contains examples on how to visualize geodataframes.
+contains examples on how to visualize PostGIS data and GeoDataFrames.
 
 https://github.com/GispoCoding/geoviz-notebooks/blob/main/notebooks/export.ipynb
 contains examples on how to export ready-made analyses and visualizations.
