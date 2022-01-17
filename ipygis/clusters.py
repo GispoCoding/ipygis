@@ -54,7 +54,7 @@ def fill_hex_grid(
 def generate_clusters(
     gdf: gpd.GeoDataFrame,
     col: str, crs: Optional[int] = None,
-    alpha: float = 0.05,
+    alpha: float = 0.005,
     geom_column: str = "geometry"
 ) -> gpd.GeoDataFrame:
     """Calculates spatial clusters/outliers based on a column in a geofataframe
@@ -85,7 +85,11 @@ def generate_clusters(
     crs     A coordinate reference system, EPSG code
     col     The column with the data being modeled
     alpha   The threshold of statistical significance to be used when determing
-            whether a cell is a cluster/outlier or not. Defaults to 0.05
+            whether a cell is a cluster/outlier or not. Defaults to 0.005. Such
+            a low value is used because our data typically contains large contrasts
+            between areas of zero index (forest, seas) and built-up areas.
+                - Larger values show the boundary between built-up and nature
+                - Smaller values show contrasts within built-up areas
 
 
     The output is the original dataframe with 2 new columns:
@@ -141,7 +145,7 @@ def generate_clusters(
     lisa = Moran_Local(
         data_lag[col],
         weights,
-        permutations=10000,
+        permutations=100000,
         # seed=1             # Use this if absolute repoducibility is needed
     )
 
