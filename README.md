@@ -20,3 +20,4 @@ This package uses following requirements:
 * [Kepler.gl](https://github.com/keplergl/kepler.gl/tree/master/bindings/kepler.gl-jupyter)
 * [ipython-sql](https://pypi.org/project/ipython-sql/)
 * [geopandas](https://geopandas.org/)
+* [PySAL-esda](https://github.com/pysal/esda)

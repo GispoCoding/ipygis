@@ -5,20 +5,22 @@ with open('README.md', 'r') as fh:
 
 setuptools.setup(
     name='ipygis',
-    version='0.1.3',
+    version='0.2.0',
     author='Joona Laine',
     author_email='joona@gispo.fi',
-    description='GIS utils for Jupyter Notebook',
+    description='GIS utils and GIS visualization/analysis functions for Jupyter Notebook',
     long_description=long_description,
     long_description_content_type='text/markdown',
     url='https://github.com/GispoCoding/ipygis',
     packages=setuptools.find_packages(),
     install_requires=[
+        'esda>=2.4.1',
         'geoalchemy2>=0.9.0',
         'geopandas>=0.8.1',
         'h3>=3.7.3',
         'ipython-sql>=0.4.0',
-        'keplergl>=0.2.1,<0.3.1'
+        'keplergl>=0.2.1,<0.3.1',
+        'libpysal>=4.5.1'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',

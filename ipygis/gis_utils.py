@@ -4,6 +4,8 @@ from math import log2
 from statistics import mean
 from typing import Dict, TypedDict, Optional, List, Union
 
+from numpy import isin
+
 import geopandas as gpd
 from keplergl import KeplerGl
 from pandas import DataFrame, Series, read_sql, json_normalize
@@ -17,6 +19,8 @@ from sql.run import ResultSet
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Query
 from geoalchemy2.shape import to_shape
+
+from .clusters import generate_clusters
 
 GEOM_COL = 'geometry'
 
@@ -225,6 +229,41 @@ KEPLER_DEFAULT_HEX_LAYER_CONFIG = {
               "coverageScale": "linear"
             }
           }
+
+KEPLER_DEFAULT_CLUSTER_LAYER_CONFIG = deepcopy(KEPLER_DEFAULT_HEX_LAYER_CONFIG)
+KEPLER_DEFAULT_CLUSTER_LAYER_CONFIG["config"]["visConfig"] = {
+    "opacity": 0.2,
+    "colorRange": {
+      "name": "Custom Palette",
+      "type": "custom",
+      "category": "Custom",
+      "colors": [
+        "#d7191c",
+        "#fdae61",
+        "#2C7BB6",
+        "#7fa0b6"
+      ]
+    }
+  }
+KEPLER_DEFAULT_CLUSTER_LAYER_CONFIG["visualChannels"]["colorScale"] = "ordinal"
+KEPLER_DEFAULT_CLUSTER_LAYER_CONFIG["visualChannels"]["colorField"]["name"] = "quadrant"
+KEPLER_DEFAULT_CLUSTER_LAYER_CONFIG["visualChannels"]["colorField"]["type"] = "string"
+KEPLER_DEFAULT_CLUSTER_FILTER_CONFIG = {
+    "dataId": [
+      "clusters"
+    ],
+    "id": "0i7a3fmze",
+    "name": [
+      "significant"
+    ],
+    "type": "select",
+    "value": True,
+    "enlarged": False,
+    "plotType": "histogram",
+    "animationWindow": "free",
+    "yAxis": None
+  }
+
 
 class Center(TypedDict):
     latitude: float
@@ -463,6 +502,7 @@ def generate_map(
         config: Optional[Dict] = KEPLER_DEFAULT_CONFIG,
         column: Optional[Union[str, List[str]]] = None,
         weights: Optional[List[int]] = None,
+        clusters: Optional[Union[bool, float]] = False
         ) -> KeplerGl:
     """
     Returns Kepler map combining multiple query results.
@@ -476,8 +516,12 @@ def generate_map(
         (same length as query_results) if you wish to plot different columns
         in different dataframes.
     :param weights: Optional. If present, will also calculate a weighted sum
-    of any H3 datasets. Must have the same length as query_results. If a dataset
-    has no hex column, it will not be included.
+        of any H3 datasets. Must have the same length as query_results. If a dataset
+        has no hex column, it will not be included.
+    :param clusters: If True, will also calculate spatial clusters and outliers for
+        the weighted sum. You may specify the statistical significance threshold
+        by specifying a float instead. The default threshold is 0.05. If weights is
+        not present, does nothing.
     """
 
     config = deepcopy(config)
@@ -550,6 +594,28 @@ def generate_map(
         hex_layer_config["visualChannels"]["colorField"]["name"] = name
         hex_layer_config["visualChannels"]["colorField"]["type"] = "real"
         config["config"]["visState"]["layers"].append(hex_layer_config)
+
+        if clusters:
+            if isinstance(clusters, float):
+                cluster_gdf = generate_clusters(gdf=sum_layer.gdf, col="sum", alpha=clusters)
+            else:
+                cluster_gdf = generate_clusters(gdf=sum_layer.gdf, col="sum")
+            name = 'clusters'
+            map_1.add_data(data=cluster_gdf, name=name)
+            hex_column = next(
+                (col for col in cluster_gdf.columns if col.startswith("hex")), False
+            )
+            # add cluster layer
+            cluster_layer_config = deepcopy(KEPLER_DEFAULT_CLUSTER_LAYER_CONFIG)
+            cluster_layer_config["id"] = name
+            cluster_layer_config["config"]["dataId"] = name
+            cluster_layer_config["config"]["label"] = name
+            cluster_layer_config["config"]["columns"]["hex_id"] = hex_column
+            cluster_layer_config["config"]["isVisible"] = False
+            config["config"]["visState"]["layers"].append(cluster_layer_config)
+            # filter cluster layer so that only statistically significant clusters
+            # are displayed by default
+            config["config"]["visState"]["filters"].append(KEPLER_DEFAULT_CLUSTER_FILTER_CONFIG)
 
     map_1.config = config
     return map_1
